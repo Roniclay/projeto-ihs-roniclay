@@ -22,7 +22,7 @@ def escrever_notas(caminho_dispositivo: str, notas: str) -> None:
 def print_help() -> None:
     print("")
     print("Comandos disponiveis:")
-    print("  00000 ate 11111  envia uma mascara no formato MAMIP")
+    print("  00000 ate 11111  envia uma nota no formato MAMIP")
     print("  reset            envia 00000")
     print("  show             mostra o ultimo estado")
     print("  help             mostra esta ajuda")
@@ -107,7 +107,7 @@ def main() -> int:
             nova_nota = normalizar_notas(entrada_nota)
 
         if not validar_nota(nova_nota):
-            print(f"Mascara invalida: {entrada_nota}")
+            print(f"Nota invalida: {entrada_nota}")
             print("Use exatamente 5 caracteres, apenas com 0 ou 1.")
             print("Exemplo valido: 01010")
             continue

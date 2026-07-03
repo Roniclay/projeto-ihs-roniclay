@@ -44,7 +44,7 @@ def analisar_notas(notas: str) -> dict:
     notas = normalizar_notas(notas)
 
     if not validar_nota(notas):
-        raise ValueError(f"Mascara invalida: {notas}")
+        raise ValueError(f"Nota invalida: {notas}")
 
     resultado = {}
 
