@@ -1,21 +1,40 @@
 #include <linux/module.h>
-#include <linux/init.h>
-#include <linux/fs.h>
+#include <linux/init.h> //permite usar module_init, module_exit, __init, __exit
+#include <linux/fs.h> 
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/uaccess.h>
 #include <linux/string.h>
+#include <linux/input.h>
 
 #define NOME_DRIVER "ihs_projeto"
 #define NOME_DISPOSITIVO "ihs_projeto"
 #define NOME_CLASSE "ihs"
+#define NOME_TECLADO "IHS Projeto Teclado Virtual"
 #define TAMANHO_NOTA 5
 
 static dev_t numero_dispositivo;
 static struct cdev ihs_cdev;
 static struct class *ihs_classe;
-
+static struct input_dev *ihs_input_dev;
 static char nota_atual[TAMANHO_NOTA + 1] = "00000";
+
+static const unsigned short teclas_por_posicao[TAMANHO_NOTA] = {
+    KEY_A,      // mindinho 
+    KEY_S,      
+    KEY_J,      
+    KEY_K,      
+    KEY_SPACE,  //dedao 
+};
+
+static const char *nomes_dedos[TAMANHO_NOTA] = {
+    "minimo",
+    "anelar",
+    "medio",
+    "indicador",
+    "polegar",
+};
+
 
 static int validar_nota(const char *nota)
 {
@@ -28,6 +47,47 @@ static int validar_nota(const char *nota)
     }
 
     return 0;
+}
+
+static void emitir_tecla(unsigned short tecla, int pressionada)
+{
+    if (!ihs_input_dev) {
+        pr_warn("%s: teclado virtual nao inicializado\n", NOME_DRIVER);
+        return;
+    }
+
+    input_report_key(ihs_input_dev, tecla, pressionada);
+    input_sync(ihs_input_dev);
+}
+
+
+static void processar_nova_nota(const char *nova_nota)
+{
+    int i;
+    unsigned short tecla;
+    int pressionada;
+
+    for (i = 0; i < TAMANHO_NOTA; i++) {
+        if (nota_atual[i] == nova_nota[i]) {
+            continue;
+        }
+
+        tecla = teclas_por_posicao[i];
+
+        if (nota_atual[i] == '0' && nova_nota[i] == '1') {
+            pressionada = 1;
+
+            pr_info("%s: dedo %s abaixado -> pressionando tecla %u\n",
+                    NOME_DRIVER, nomes_dedos[i], tecla);
+        } else {
+            pressionada = 0;
+
+            pr_info("%s: dedo %s levantado -> soltando tecla %u\n",
+                    NOME_DRIVER, nomes_dedos[i], tecla);
+        }
+
+        emitir_tecla(tecla, pressionada);
+    }
 }
 
 
@@ -57,7 +117,6 @@ static ssize_t ihs_write(struct file *file, const char __user *user_buffer,
 
     kernel_buffer[bytes_to_copy] = '\0';
 
-    
     tamanho_nota = strcspn(kernel_buffer, "\n\r");
 
     if (tamanho_nota != TAMANHO_NOTA) {
@@ -73,6 +132,8 @@ static ssize_t ihs_write(struct file *file, const char __user *user_buffer,
         pr_warn("%s: nota invalida: %s\n", NOME_DRIVER, kernel_buffer);
         return ret;
     }
+
+    processar_nova_nota(kernel_buffer);
 
     memcpy(nota_atual, kernel_buffer, TAMANHO_NOTA + 1);
 
@@ -95,12 +156,53 @@ static ssize_t ihs_read(struct file *file, char __user *user_buffer,
                                    output_buffer, len);
 }
 
-
 static const struct file_operations ihs_fops = {
     .owner = THIS_MODULE,
     .write = ihs_write,
     .read = ihs_read,
 };
+
+
+static int registrar_teclado_virtual(void)
+{
+    int ret;
+    int i;
+
+    ihs_input_dev = input_allocate_device();
+    if (!ihs_input_dev) {
+        pr_err("%s: erro ao alocar input device\n", NOME_DRIVER);
+        return -ENOMEM;
+    }
+
+    ihs_input_dev->name = NOME_TECLADO;
+    ihs_input_dev->phys = "ihs_projeto/input0";
+    ihs_input_dev->id.bustype = BUS_VIRTUAL;
+    ihs_input_dev->id.vendor = 0x0001;
+    ihs_input_dev->id.product = 0x0001;
+    ihs_input_dev->id.version = 0x0001;
+
+    
+    set_bit(EV_KEY, ihs_input_dev->evbit);
+
+    
+    for (i = 0; i < TAMANHO_NOTA; i++) {
+        set_bit(teclas_por_posicao[i], ihs_input_dev->keybit);
+    }
+
+    ret = input_register_device(ihs_input_dev);
+    if (ret) {
+        pr_err("%s: erro ao registrar teclado virtual\n", NOME_DRIVER);
+        input_free_device(ihs_input_dev);
+        ihs_input_dev = NULL;
+        return ret;
+    }
+
+    pr_info("%s: teclado virtual registrado: %s\n",
+            NOME_DRIVER, NOME_TECLADO);
+
+    return 0;
+}
+
 
 static int __init ihs_projeto_init(void)
 {
@@ -109,13 +211,14 @@ static int __init ihs_projeto_init(void)
 
     pr_info("%s: iniciando modulo\n", NOME_DRIVER);
 
+   
     ret = alloc_chrdev_region(&numero_dispositivo, 0, 1, NOME_DISPOSITIVO);
     if (ret < 0) {
         pr_err("%s: erro ao alocar major/minor\n", NOME_DRIVER);
         return ret;
     }
 
-   
+
     cdev_init(&ihs_cdev, &ihs_fops);
     ihs_cdev.owner = THIS_MODULE;
 
@@ -127,7 +230,7 @@ static int __init ihs_projeto_init(void)
         return ret;
     }
 
-   
+    
     ihs_classe = class_create(NOME_CLASSE);
     if (IS_ERR(ihs_classe)) {
         ret = PTR_ERR(ihs_classe);
@@ -139,13 +242,26 @@ static int __init ihs_projeto_init(void)
         return ret;
     }
 
-   
+    
     ihs_dispositivo = device_create(ihs_classe, NULL, numero_dispositivo,
                                     NULL, NOME_DISPOSITIVO);
     if (IS_ERR(ihs_dispositivo)) {
         ret = PTR_ERR(ihs_dispositivo);
         pr_err("%s: erro ao criar dispositivo\n", NOME_DRIVER);
 
+        class_destroy(ihs_classe);
+        cdev_del(&ihs_cdev);
+        unregister_chrdev_region(numero_dispositivo, 1);
+
+        return ret;
+    }
+
+   
+    ret = registrar_teclado_virtual();
+    if (ret < 0) {
+        pr_err("%s: erro ao inicializar teclado virtual\n", NOME_DRIVER);
+
+        device_destroy(ihs_classe, numero_dispositivo);
         class_destroy(ihs_classe);
         cdev_del(&ihs_cdev);
         unregister_chrdev_region(numero_dispositivo, 1);
@@ -167,6 +283,20 @@ static int __init ihs_projeto_init(void)
 
 static void __exit ihs_projeto_exit(void)
 {
+    int i;
+
+   
+    for (i = 0; i < TAMANHO_NOTA; i++) {
+        if (nota_atual[i] == '1') {
+            emitir_tecla(teclas_por_posicao[i], 0);
+        }
+    }
+
+    if (ihs_input_dev) {
+        input_unregister_device(ihs_input_dev);
+        ihs_input_dev = NULL;
+    }
+
     device_destroy(ihs_classe, numero_dispositivo);
     class_destroy(ihs_classe);
     cdev_del(&ihs_cdev);
@@ -180,5 +310,5 @@ module_exit(ihs_projeto_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Roniclay");
-MODULE_DESCRIPTION("Driver projeto IHS");
-MODULE_VERSION("0.2");
+MODULE_DESCRIPTION("Driver IHS para luva/simulador MAMIP com teclado virtual");
+MODULE_VERSION("0.3");
