@@ -1,5 +1,5 @@
 #include <linux/module.h>
-#include <linux/init.h> //permite usar module_init, module_exit, __init, __exit
+#include <linux/init.h> 
 #include <linux/fs.h> 
 #include <linux/cdev.h>
 #include <linux/device.h>
